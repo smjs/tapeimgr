@@ -11,6 +11,7 @@ import logging
 import glob
 from . import config
 from . import shared
+import re
 
 class Tape:
     """Tape class"""
@@ -324,27 +325,60 @@ class Tape:
             args.append('1')
             mtStatus, mtOut, mtErr = shared.launchSubProcess(args, False)
 
-        # Try to position tape 1 record forward; if this fails this means
-        # the end of the tape was reached
         args = ['mt']
         args.append('-f')
         args.append(self.tapeDevice)
-        args.append('fsr')
-        args.append('1')
+        args.append('status')
         mtStatus, mtOut, mtErr = shared.launchSubProcess(args, False)
+        result = re.search(r"file number = (\b\d+\b)", mtOut, re.M)
+        if not result:
+            logging.info('*** ERROR: Failed to find file number in status output ***')
+            logging.info('mtOut for status before while = ' + mtOut)
+        prevFileNum = result.group(1);
 
-        if mtStatus == 0:
-            # Another file exists. Position tape one record backward
+        # Try to position tape 1 record forward; if this fails this means
+        # the end of the tape was reached
+        haveNext = False
+        while not self.endOfTape and not haveNext:
             args = ['mt']
             args.append('-f')
             args.append(self.tapeDevice)
-            args.append('bsr')
+            args.append('fsr')
             args.append('1')
             mtStatus, mtOut, mtErr = shared.launchSubProcess(args, False)
-        else:
-            # No further files, end of tape reached
-            logging.info('*** Reached end of tape ***')
-            self.endOfTape = True
+
+            if mtStatus == 0:
+                # Another file exists. Position tape one record backward
+                args = ['mt']
+                args.append('-f')
+                args.append(self.tapeDevice)
+                args.append('bsr')
+                args.append('1')
+                mtStatus, mtOut, mtErr = shared.launchSubProcess(args, False)
+                haveNext = True
+            else:
+                # Check if we had an empty file (no records so fsr fails)
+                # Instead of reading a block it moves the tape to the next file mark
+                args = ['mt']
+                args.append('-f')
+                args.append(self.tapeDevice)
+                args.append('status')
+                mtStatus, mtOut, mtErr = shared.launchSubProcess(args, False)
+                result = re.search(r"file number = (\b\d+\b)", mtOut, re.M)
+                if not result:
+                    logging.info('*** ERROR: Failed to find file number in status output ***')
+                    logging.info('mtOut for status before in else = ' + mtOut)
+                fileNum = result.group(1);
+               
+
+                if fileNum == prevFileNum:
+                    # No further files, end of tape reached
+                    logging.info('*** Reached end of tape ***')
+                    self.endOfTape = True
+                else: 
+                    logging.info('*** Empty file skipped ***')
+                    prevFileNum = fileNum
+
 
     def findBlockSize(self):
         """Find block size, starting from blockSizeInit"""
